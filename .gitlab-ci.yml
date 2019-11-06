@@ -1,0 +1,50 @@
+stages:
+        - build
+
+
+before_script:
+        - export CURRENT_DATETIME=`date +"%Y%m%d-%H%M%S"`        
+build:
+        stage: package
+        tags: 
+                - integration
+        script: 
+                - ./mvnw package
+
+        cache:
+                key: "$CI_COMMIT_REF_NAME"
+                policy: push
+                paths:
+                        - petClinic.docker/dist
+
+docker_push:
+        image: docker:latest
+        stage: push
+        script:
+                - docker login -u "$CI_REGISTRY_USER" -p "$CI_REGISTRY_PASSWORD" $CI_REGISTRY
+                - docker build --pull -t "$CI_REGISTRY_IMAGE:$CURRENT_DATETIME" -t "$CI_REGISTRY_IMAGE:staging" ./petClinic.docker
+                - docker push "$CI_REGISTRY_IMAGE:$CURRENT_DATETIME"
+                - docker push "$CI_REGISTRY_IMAGE:staging"
+        cache:
+                key: "$CI_COMMIT_REF_NAME"
+                policy: pull
+                paths:
+                        - petClinic.docker/dist
+        only:
+                - master
+                          
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
