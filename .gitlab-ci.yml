@@ -1,11 +1,12 @@
 stages:
         - build
+        - push
 
 
 before_script:
         - export CURRENT_DATETIME=`date +"%Y%m%d-%H%M%S"`        
 build:
-        stage: package
+        stage: build 
         tags: 
                 - integration
         script: 
