@@ -7,8 +7,8 @@ before_script:
         - export CURRENT_DATETIME=`date +"%Y%m%d-%H%M%S"`        
 build:
         stage: build 
-        tags: 
-                - integration
+
+
         script: 
                 - ./mvnw package
 
