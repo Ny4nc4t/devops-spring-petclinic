@@ -1,51 +1,67 @@
 stages:
-        - build
-        - push
-
+        # - build
+        # - push
+        - staging
 
 before_script:
-        - export CURRENT_DATETIME=`date +"%Y%m%d-%H%M%S"`        
-build:
-        stage: build 
+        - export CURRENT_DATETIME=`date +"%Y%m%d-%H%M%S"`
+services:
+  - name: docker:dind
 
+cache:
+  key: "$CI_COMMIT_REF_NAME"
+  paths:
+    - target/
 
-        script: 
-                - ./mvnw package
+variables:
+  MAVEN_OPTS: -Dmaven.repo.local=/cache/maven.repository
 
-        cache:
-                key: "$CI_COMMIT_REF_NAME"
-                policy: push
-                paths:
-                        - petClinic.docker/dist
+# build:
+#         image: maven:3-jdk-8
+#         stage: build
+#         cache:
+#                 key: "$CI_COMMIT_REF_NAME"
+#                 policy: push
+#                 paths:
+#                         - target/
+#                         - .m2/
+#         cache:
+#             key: "$CI_COMMIT_REF_NAME"
+#             paths:
+#                 - target/
+#         artifacts:
+#           paths:
+#             - target/
+#         script:
+#                 - ./mvnw package
 
-docker_push:
-        image: docker:latest
-        stage: push
-        script:
-                - docker login -u "$CI_REGISTRY_USER" -p "$CI_REGISTRY_PASSWORD" $CI_REGISTRY
-                - docker build --pull -t "$CI_REGISTRY_IMAGE:$CURRENT_DATETIME" -t "$CI_REGISTRY_IMAGE:staging" ./petClinic.docker
-                - docker push "$CI_REGISTRY_IMAGE:$CURRENT_DATETIME"
-                - docker push "$CI_REGISTRY_IMAGE:staging"
-        cache:
-                key: "$CI_COMMIT_REF_NAME"
-                policy: pull
-                paths:
-                        - petClinic.docker/dist
-        only:
-                - master
-                          
+# docker_push:
+#         image: docker:latest
+#         stage: push
+#         tags: [shell]
+#         script:
+#                 - echo "$CI_COMMIT_REF_NAME"
+#                 - docker login -u "dev" -p "devpassword" http://192.168.33.9:5000
+#                 - docker build --pull -t "$CURRENT_DATETIME" -t "staging" .
+#                 - docker tag "$CURRENT_DATETIME" 192.168.33.9:5000/$CURRENT_DATETIME
+#                 - docker tag "staging" 192.168.33.9:5000/staging
+#                 - docker push 192.168.33.9:5000/$CURRENT_DATETIME
+#                 - docker push 192.168.33.9:5000/staging
+#         only:
+#                 - master
 
-
-
-
-
-
-
-
-
-
-
-
-
-
-
+deploy_staging:
+    image: tmaier/docker-compose:latest
+    stage: staging
+    tags: [shell]
+    script:
+        # - docker login -u "dev" -p "devpassword" http://192.168.33.9:5000
+        # - docker pull "192.168.33.9:5000/staging"
+        # - docker-compose -f docker-compose.yml pull
+        # - docker-compose -f docker-compose.yml up -d
+        - touch /home/vagrant/test.txt
+    environment:
+        name: staging
+        url: http://192.168.33.7
+    only:
+        - master

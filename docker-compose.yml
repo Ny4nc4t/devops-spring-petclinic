@@ -1,9 +1,6 @@
-mysql:
-  image: mysql:5.7
-  ports:
-    - "3306:3306"
-  environment:
-    - MYSQL_ROOT_PASSWORD=petclinic
-    - MYSQL_DATABASE=petclinic
-  volumes:
-    - "./conf.d:/etc/mysql/conf.d:ro"
+web:
+    restart: always
+    image: 192.168.33.9:5000/staging
+    container_name: petclinic
+    ports: 
+        - 8084:8080
