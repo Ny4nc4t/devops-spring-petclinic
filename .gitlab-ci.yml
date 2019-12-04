@@ -2,6 +2,7 @@ stages:
         # - build
         # - push
         - staging
+        - production
 
 before_script:
         - export CURRENT_DATETIME=`date +"%Y%m%d-%H%M%S"`
@@ -53,15 +54,32 @@ variables:
 deploy_staging:
     image: tmaier/docker-compose:latest
     stage: staging
-    tags: [shell]
+    tags: [staging]
     script:
-        # - docker login -u "dev" -p "devpassword" http://192.168.33.9:5000
-        # - docker pull "192.168.33.9:5000/staging"
-        # - docker-compose -f docker-compose.yml pull
-        # - docker-compose -f docker-compose.yml up -d
-        - touch /home/vagrant/test.txt
+        - docker info
+        - docker login -u "dev" -p "devpassword" https://192.168.33.9:5000
+        - docker pull "192.168.33.9:5000/staging"
+        - docker-compose -f docker-compose.yml pull
+        - docker-compose -f docker-compose.yml up -d
+        # - touch ~/test.txt
     environment:
         name: staging
         url: http://192.168.33.7
+    only:
+        - master
+
+deploy_production:
+    image: tmaier/docker-compose:latest
+    stage: production
+    tags: [production]
+    script:
+        - docker login -u "dev" -p "devpassword" https://192.168.33.9:5000
+        - docker pull "192.168.33.9:5000/staging"
+        - docker-compose -f docker-compose.yml pull
+        - docker-compose -f docker-compose.yml up -d
+    environment:
+        name: production
+        url: http://192.168.33.5
+    when: manual
     only:
         - master
