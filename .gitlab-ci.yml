@@ -90,7 +90,7 @@ promote_image:
     image: docker:latest
     stage: release
     tags:
-        - shell
+        - [shell]
     script:
         - docker tag $DOCKER_REGISTRY_ADDR/stage-$DOCKER_IMAGE_TAGGED $DOCKER_REGISTRY_ADDR/prod-$DOCKER_IMAGE_TAGGED
     when: manual
