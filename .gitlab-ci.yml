@@ -1,85 +1,120 @@
-stages:
-        # - build
-        # - push
-        - staging
-        - production
+image: maven:latest
 
-before_script:
-        - export CURRENT_DATETIME=`date +"%Y%m%d-%H%M%S"`
-services:
-  - name: docker:dind
+stages:
+    - build
+    - push
+    - staging
+    - release
+    - production
 
 cache:
-  key: "$CI_COMMIT_REF_NAME"
+  key:  ${CI_COMMIT_REF_SLUG}
   paths:
+    - .m2/repository
     - target/
 
 variables:
-  MAVEN_OPTS: -Dmaven.repo.local=/cache/maven.repository
+  MAVEN_OPTS: "-Dhttps.protocols=TLSv1.2 -Dmaven.repo.local=$CI_PROJECT_DIR/.m2/repository -Dorg.slf4j.simpleLogger.log.org.apache.maven.cli.transfer.Slf4jMavenTransferListener=WARN -Dorg.slf4j.simpleLogger.showDateTime=true -Djava.awt.headless=true"
+  MAVEN_CLI_OPTS: "--batch-mode --errors --fail-at-end --show-version -DinstallAtEnd=true"
 
-# build:
-#         image: maven:3-jdk-8
-#         stage: build
-#         cache:
-#                 key: "$CI_COMMIT_REF_NAME"
-#                 policy: push
-#                 paths:
-#                         - target/
-#                         - .m2/
-#         cache:
-#             key: "$CI_COMMIT_REF_NAME"
-#             paths:
-#                 - target/
-#         artifacts:
-#           paths:
-#             - target/
-#         script:
-#                 - ./mvnw package
+  # todo: put vars in env secrets
+  PROJECT_IMAGE: petclinic_v2.2.0
+  DOCKER_REGISTRY_ADDR: 192.168.33.9:5000
+  DOCKER_USER: dev
+  DOCKER_PASSWORD: devpassword
+  DOCKER_IMAGE_TAGGED: $PROJECT_IMAGE:$CI_COMMIT_SHORT_SHA
+  MAVEN_JAR_VERSION: "2.2.0.BUILD-SNAPSHOT"
+  HTTPD_PORT: 8888
+  STAGING_EXPOSED_PORT: 8080
+  PRODUCTION_EXPOSED_PORT: 8080
 
-# docker_push:
-#         image: docker:latest
-#         stage: push
-#         tags: [shell]
-#         script:
-#                 - echo "$CI_COMMIT_REF_NAME"
-#                 - docker login -u "dev" -p "devpassword" http://192.168.33.9:5000
-#                 - docker build --pull -t "$CURRENT_DATETIME" -t "staging" .
-#                 - docker tag "$CURRENT_DATETIME" 192.168.33.9:5000/$CURRENT_DATETIME
-#                 - docker tag "staging" 192.168.33.9:5000/staging
-#                 - docker push 192.168.33.9:5000/$CURRENT_DATETIME
-#                 - docker push 192.168.33.9:5000/staging
-#         only:
-#                 - master
+
+
+mvn_package:
+    stage: build
+    tags:
+        - [shell]
+    artifacts:
+      paths:
+          - target/
+    script:
+        - mvn $MAVEN_CLI_OPTS package
+
+
+docker_push:
+    stage: push
+    tags:
+        - [shell]
+    dependencies:
+        - mvn_package
+    script:
+        - docker login -u $DOCKER_USER -p $DOCKER_PASSWORD $DOCKER_REGISTRY_ADDR
+        - docker build -t $DOCKER_REGISTRY_ADDR/stage-$DOCKER_IMAGE_TAGGED --build-arg MAVEN_VERSION=$MAVEN_JAR_VERSION .
+        - docker push $DOCKER_REGISTRY_ADDR/stage-$DOCKER_IMAGE_TAGGED
+    only:
+        - master
+        
+
+httpd_code_coverage_service:
+    stage: push
+    tags:
+        - [shell] #possible to specify second runner for parallel execution
+    dependencies:
+        - mvn_package
+    script:
+        - 'sed -i "s/<h1>/<h1> COMMIT SHA: #$CI_COMMIT_SHORT_SHA       PIPELINE ID: $CI_PIPELINE_ID        /" target/site/jacoco/index.html'
+        - docker rm -f http_code_coverage_service || true 
+        - docker run -dit --name http_code_coverage_service -p $HTTPD_PORT:80  -v $(pwd)/target/site/jacoco/:/usr/local/apache2/htdocs/ httpd:2.4
+    only:
+        - master
+        
 
 deploy_staging:
-    image: tmaier/docker-compose:latest
+    image: docker:latest
     stage: staging
-    tags: [staging]
+    tags:
+        - [staging]
     script:
-        - docker info
-        - docker login -u "dev" -p "devpassword" https://192.168.33.9:5000
-        - docker pull "192.168.33.9:5000/staging"
-        - docker-compose -f docker-compose.yml pull
-        - docker-compose -f docker-compose.yml up -d
-        # - touch ~/test.txt
+        - docker stop petclinic_stage_container || true # used to always get a successful exit code in case the docker container is not yet deployed
+        - docker rm petclinic_stage_container || true
+        - docker login -u $DOCKER_USER -p $DOCKER_PASSWORD $DOCKER_REGISTRY_ADDR
+        - docker pull $DOCKER_REGISTRY_ADDR/stage-$DOCKER_IMAGE_TAGGED
+        - docker run --rm=true -d -p $STAGING_EXPOSED_PORT:8080 --name petclinic_stage_container $DOCKER_REGISTRY_ADDR/stage-$DOCKER_IMAGE_TAGGED
     environment:
         name: staging
         url: http://192.168.33.7
     only:
         - master
 
-deploy_production:
-    image: tmaier/docker-compose:latest
-    stage: production
-    tags: [production]
+promote_image:
+    image: docker:latest
+    stage: release
+    tags:
+        - [shell]
     script:
-        - docker login -u "dev" -p "devpassword" https://192.168.33.9:5000
-        - docker pull "192.168.33.9:5000/staging"
-        - docker-compose -f docker-compose.yml pull
-        - docker-compose -f docker-compose.yml up -d
+        - docker tag $DOCKER_REGISTRY_ADDR/stage-$DOCKER_IMAGE_TAGGED $DOCKER_REGISTRY_ADDR/prod-$DOCKER_IMAGE_TAGGED
+    when: manual
+    allow_failure: false
+    only:
+        - master
+
+deploy_production:
+    image: docker:latest
+    stage: production
+    tags:
+        - [production]
+    script:
+        - docker stop petclinic_prod_container || true
+        - docker rm petclinic_prod_container || true
+        - docker login -u $DOCKER_USER -p $DOCKER_PASSWORD $DOCKER_REGISTRY_ADDR
+        - docker pull $DOCKER_REGISTRY_ADDR/prod-$DOCKER_IMAGE_TAGGED
+        - docker run --rm=true -d -p $PRODUCTION_EXPOSED_PORT:8080 --name petclinic_stage_container $DOCKER_REGISTRY_ADDR/stage-$DOCKER_IMAGE_TAGGED
     environment:
         name: production
         url: http://192.168.33.5
     when: manual
+    allow_failure: false
+    needs:
+        - promote_image
     only:
         - master
