@@ -17,7 +17,7 @@ variables:
   MAVEN_OPTS: "-Dhttps.protocols=TLSv1.2 -Dmaven.repo.local=$CI_PROJECT_DIR/.m2/repository -Dorg.slf4j.simpleLogger.log.org.apache.maven.cli.transfer.Slf4jMavenTransferListener=WARN -Dorg.slf4j.simpleLogger.showDateTime=true -Djava.awt.headless=true"
   MAVEN_CLI_OPTS: "--batch-mode --errors --fail-at-end --show-version -DinstallAtEnd=true"
 
-  # todo: put vars in env secrets
+  # todo: put vars in env secrets, put here for ease of reproduction // added here for ease of reproducibility
   PROJECT_IMAGE: petclinic_v2.2.0
   DOCKER_REGISTRY_ADDR: 192.168.33.9:5000
   DOCKER_USER: dev
@@ -25,26 +25,82 @@ variables:
   DOCKER_IMAGE_TAGGED: $PROJECT_IMAGE:$CI_COMMIT_SHORT_SHA
   MAVEN_JAR_VERSION: "2.2.0.BUILD-SNAPSHOT"
   HTTPD_PORT: 8888
-  STAGING_EXPOSED_PORT: 8080
+  STAGING_EXPOSED_PORT: 8070
   PRODUCTION_EXPOSED_PORT: 8080
+  PRODUCTION_PROPERTIES_FILE: |
+                    # PRODUCTION PROPERTIES FILE
+                    database=hsqldb
+                    spring.datasource.schema=classpath*:db/${database}/schema.sql
+                    spring.datasource.data=classpath*:db/${database}/data.sql
 
+                    # Web
+                    spring.thymeleaf.mode=HTML
+
+                    # JPA
+                    spring.jpa.hibernate.ddl-auto=none
+
+                    # Internationalization
+                    spring.messages.basename=messages/messages
+
+                    # Actuator / Management
+                    management.endpoints.web.base-path=/manage
+                    management.endpoints.web.exposure.include=*
+
+                    # Logging
+                    logging.level.org.springframework=INFO
+                    # logging.level.org.springframework.web=DEBUG
+                    # logging.level.org.springframework.context.annotation=TRACE
+
+                    # Maximum time static resources should be cached
+                    spring.resources.cache.cachecontrol.max-age=12h
+
+
+  STAGING_PROPERTIES_FILE: |
+                    # STAGING PROPERTIES FILE
+                    database=hsqldb
+                    spring.datasource.schema=classpath*:db/${database}/schema.sql
+                    spring.datasource.data=classpath*:db/${database}/data.sql
+
+                    # Web
+                    spring.thymeleaf.mode=HTML
+
+                    # JPA
+                    spring.jpa.hibernate.ddl-auto=none
+
+                    # Internationalization
+                    spring.messages.basename=messages/messages
+
+                    # Actuator / Management
+                    management.endpoints.web.base-path=/manage
+                    management.endpoints.web.exposure.include=*
+
+                    # Logging
+                    logging.level.org.springframework=INFO
+                    # logging.level.org.springframework.web=DEBUG
+                    # logging.level.org.springframework.context.annotation=TRACE
+
+                    # Maximum time static resources should be cached
+                    spring.resources.cache.cachecontrol.max-age=12h
 
 
 mvn_package:
     stage: build
     tags:
-        - [shell]
+        - build
     artifacts:
+      expire_in: 1 day
       paths:
           - target/
+          
     script:
         - mvn $MAVEN_CLI_OPTS package
+
 
 
 docker_push:
     stage: push
     tags:
-        - [shell]
+        - shell
     dependencies:
         - mvn_package
     script:
@@ -58,7 +114,7 @@ docker_push:
 httpd_code_coverage_service:
     stage: push
     tags:
-        - [shell] #possible to specify second runner for parallel execution
+        - shell #possible to specify second runner for parallel execution
     dependencies:
         - mvn_package
     script:
@@ -73,42 +129,55 @@ deploy_staging:
     image: docker:latest
     stage: staging
     tags:
-        - [staging]
+        - staging
     script:
         - docker stop petclinic_stage_container || true # used to always get a successful exit code in case the docker container is not yet deployed
         - docker rm petclinic_stage_container || true
         - docker login -u $DOCKER_USER -p $DOCKER_PASSWORD $DOCKER_REGISTRY_ADDR
         - docker pull $DOCKER_REGISTRY_ADDR/stage-$DOCKER_IMAGE_TAGGED
-        - docker run --rm=true -d -p $STAGING_EXPOSED_PORT:8080 --name petclinic_stage_container $DOCKER_REGISTRY_ADDR/stage-$DOCKER_IMAGE_TAGGED
+        - touch application.properties && chmod 666 application.properties && echo "$STAGING_PROPERTIES_FILE" > application.properties
+        - docker create --rm=true -p $STAGING_EXPOSED_PORT:8080 --name petclinic_stage_container $DOCKER_REGISTRY_ADDR/stage-$DOCKER_IMAGE_TAGGED
+        - docker cp $(pwd)/application.properties petclinic_stage_container:/
+        - rm -f application.properties
+        - docker start petclinic_stage_container
     environment:
         name: staging
         url: http://192.168.33.7
     only:
         - master
 
+
 promote_image:
     image: docker:latest
     stage: release
     tags:
-        - [shell]
+        - shell
     script:
         - docker tag $DOCKER_REGISTRY_ADDR/stage-$DOCKER_IMAGE_TAGGED $DOCKER_REGISTRY_ADDR/prod-$DOCKER_IMAGE_TAGGED
+        - docker push $DOCKER_REGISTRY_ADDR/prod-$DOCKER_IMAGE_TAGGED
     when: manual
     allow_failure: false
+    needs:
+        - deploy_staging
     only:
         - master
+
 
 deploy_production:
     image: docker:latest
     stage: production
     tags:
-        - [production]
+        - production
     script:
         - docker stop petclinic_prod_container || true
         - docker rm petclinic_prod_container || true
         - docker login -u $DOCKER_USER -p $DOCKER_PASSWORD $DOCKER_REGISTRY_ADDR
         - docker pull $DOCKER_REGISTRY_ADDR/prod-$DOCKER_IMAGE_TAGGED
-        - docker run --rm=true -d -p $PRODUCTION_EXPOSED_PORT:8080 --name petclinic_stage_container $DOCKER_REGISTRY_ADDR/stage-$DOCKER_IMAGE_TAGGED
+        - touch application.properties && chmod 666 application.properties && echo "$PRODUCTION_PROPERTIES_FILE" > application.properties
+        - docker create --rm=true -p $PRODUCTION_EXPOSED_PORT:8080 --name petclinic_prod_container $DOCKER_REGISTRY_ADDR/prod-$DOCKER_IMAGE_TAGGED
+        - docker cp $(pwd)/application.properties petclinic_prod_container:/
+        - rm -f application.properties
+        - docker start petclinic_prod_container
     environment:
         name: production
         url: http://192.168.33.5
