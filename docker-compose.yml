@@ -1,6 +1,0 @@
-web:
-    restart: always
-    image: 192.168.33.9:5000/staging
-    container_name: petclinic
-    ports: 
-        - 8080:8080
