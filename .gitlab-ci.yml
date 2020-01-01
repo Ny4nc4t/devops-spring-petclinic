@@ -4,6 +4,7 @@ stages:
     - build
     - push
     - staging
+    - uat
     - release
     - production
 
@@ -25,13 +26,13 @@ variables:
   DOCKER_IMAGE_TAGGED: $PROJECT_IMAGE:$CI_COMMIT_SHORT_SHA
   MAVEN_JAR_VERSION: "2.2.0.BUILD-SNAPSHOT"
   HTTPD_PORT: 8888
-  STAGING_EXPOSED_PORT: 8070
+  STAGING_EXPOSED_PORT: 8080
   PRODUCTION_EXPOSED_PORT: 8080
   PRODUCTION_PROPERTIES_FILE: |
                     # PRODUCTION PROPERTIES FILE
-                    database=hsqldb
-                    spring.datasource.schema=classpath*:db/${database}/schema.sql
-                    spring.datasource.data=classpath*:db/${database}/data.sql
+                    #database=hsqldb
+                    #spring.datasource.schema=classpath*:db/${database}/schema.sql
+                    #spring.datasource.data=classpath*:db/${database}/data.sql
 
                     # Web
                     spring.thymeleaf.mode=HTML
@@ -57,9 +58,9 @@ variables:
 
   STAGING_PROPERTIES_FILE: |
                     # STAGING PROPERTIES FILE
-                    database=hsqldb
-                    spring.datasource.schema=classpath*:db/${database}/schema.sql
-                    spring.datasource.data=classpath*:db/${database}/data.sql
+                    #database=hsqldb
+                    #spring.datasource.schema=classpath*:db/${database}/schema.sql
+                    #spring.datasource.data=classpath*:db/${database}/data.sql
 
                     # Web
                     spring.thymeleaf.mode=HTML
@@ -95,8 +96,6 @@ mvn_package:
     script:
         - mvn $MAVEN_CLI_OPTS package
 
-
-
 docker_push:
     stage: push
     tags:
@@ -124,14 +123,14 @@ httpd_code_coverage_service:
     only:
         - master
         
-
+       
 deploy_staging:
     image: docker:latest
     stage: staging
     tags:
         - staging
     script:
-        - docker stop petclinic_stage_container || true # used to always get a successful exit code in case the docker container is not yet deployed
+        - docker stop petclinic_stage_container || true # used to always get a successful exit code in case the docker container is not yet deployed 
         - docker rm petclinic_stage_container || true
         - docker login -u $DOCKER_USER -p $DOCKER_PASSWORD $DOCKER_REGISTRY_ADDR
         - docker pull $DOCKER_REGISTRY_ADDR/stage-$DOCKER_IMAGE_TAGGED
@@ -145,7 +144,37 @@ deploy_staging:
         url: http://192.168.33.7
     only:
         - master
-
+        
+performance_test:
+    stage: uat
+    tags:
+        - shell
+    script:
+        - artillery quick --count 20 -n 40 http://192.168.33.7:$STAGING_EXPOSED_PORT -o artillery_result -q
+    needs:
+        - deploy_staging
+    artifacts:
+      expire_in: 1 day
+      paths:
+          - ./artillery_result
+    only:
+        - master
+        
+selenium_uat:
+    stage: uat
+    tags:
+        - shell
+    script:
+        - wget https://gist.githubusercontent.com/Sebastienn/09261e2086a7f8caa48f85f4a234c780/raw/ -O selenium-uat.py
+        - echo $(cat selenium-uat.py)
+        - chmod +x selenium-uat.py
+        - python selenium-uat.py http://192.168.33.7:$STAGING_EXPOSED_PORT
+        - rm -f selenium-uat.py
+    allow_failure: false
+    needs:
+        - deploy_staging
+    only:
+        - master
 
 promote_image:
     image: docker:latest
@@ -158,11 +187,10 @@ promote_image:
     when: manual
     allow_failure: false
     needs:
-        - deploy_staging
+        - selenium_uat
     only:
         - master
-
-
+        
 deploy_production:
     image: docker:latest
     stage: production
