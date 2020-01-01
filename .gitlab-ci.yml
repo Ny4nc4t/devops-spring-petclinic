@@ -18,7 +18,7 @@ variables:
   MAVEN_OPTS: "-Dhttps.protocols=TLSv1.2 -Dmaven.repo.local=$CI_PROJECT_DIR/.m2/repository -Dorg.slf4j.simpleLogger.log.org.apache.maven.cli.transfer.Slf4jMavenTransferListener=WARN -Dorg.slf4j.simpleLogger.showDateTime=true -Djava.awt.headless=true"
   MAVEN_CLI_OPTS: "--batch-mode --errors --fail-at-end --show-version -DinstallAtEnd=true"
 
-  # todo: put vars in env secrets, put here for ease of reproduction // added here for ease of reproducibility
+  # !todo: put vars in gitlab env secrets, put here for ease of reproducibility
   PROJECT_IMAGE: petclinic_v2.2.0
   DOCKER_REGISTRY_ADDR: 192.168.33.9:5000
   DOCKER_USER: dev
