@@ -1,5 +1,3 @@
-image: maven:latest
-
 stages:
     - build
     - push
@@ -18,7 +16,7 @@ variables:
   MAVEN_OPTS: "-Dhttps.protocols=TLSv1.2 -Dmaven.repo.local=$CI_PROJECT_DIR/.m2/repository -Dorg.slf4j.simpleLogger.log.org.apache.maven.cli.transfer.Slf4jMavenTransferListener=WARN -Dorg.slf4j.simpleLogger.showDateTime=true -Djava.awt.headless=true"
   MAVEN_CLI_OPTS: "--batch-mode --errors --fail-at-end --show-version -DinstallAtEnd=true"
 
-  # !todo: put vars in gitlab env secrets, put here for ease of reproducibility
+  # !todo: put vars in gitlab env var/file secrets, put here for ease of reproducibility
   PROJECT_IMAGE: petclinic_v2.2.0
   DOCKER_REGISTRY_ADDR: 192.168.33.9:5000
   DOCKER_USER: dev
@@ -26,14 +24,14 @@ variables:
   DOCKER_IMAGE_TAGGED: $PROJECT_IMAGE:$CI_COMMIT_SHORT_SHA
   MAVEN_JAR_VERSION: "2.2.0.BUILD-SNAPSHOT"
   HTTPD_PORT: 8888
+  HTTPD_DIRECTORY_NAME: $CI_PIPELINE_ID
+  SELENIUM_UAT_TESTS_REPO: 'https://gist.githubusercontent.com/Sebastienn/fc883ea0389ca85c1df358b0690d8a46/raw'
   STAGING_EXPOSED_PORT: 8080
   PRODUCTION_EXPOSED_PORT: 8080
+  STAGING_IP: http://192.168.33.7
+  STAGING_ADDR: $STAGING_IP:$STAGING_EXPOSED_PORT
   PRODUCTION_PROPERTIES_FILE: |
                     # PRODUCTION PROPERTIES FILE
-                    #database=hsqldb
-                    #spring.datasource.schema=classpath*:db/${database}/schema.sql
-                    #spring.datasource.data=classpath*:db/${database}/data.sql
-
                     # Web
                     spring.thymeleaf.mode=HTML
 
@@ -58,10 +56,6 @@ variables:
 
   STAGING_PROPERTIES_FILE: |
                     # STAGING PROPERTIES FILE
-                    #database=hsqldb
-                    #spring.datasource.schema=classpath*:db/${database}/schema.sql
-                    #spring.datasource.data=classpath*:db/${database}/data.sql
-
                     # Web
                     spring.thymeleaf.mode=HTML
 
@@ -89,7 +83,6 @@ mvn_package:
     tags:
         - build
     artifacts:
-      expire_in: 1 day
       paths:
           - target/
           
@@ -110,16 +103,17 @@ docker_push:
         - master
         
 
-httpd_code_coverage_service:
+httpd_web_server:
     stage: push
     tags:
-        - shell #possible to specify second runner for parallel execution
+        - shell
     dependencies:
         - mvn_package
     script:
         - 'sed -i "s/<h1>/<h1> COMMIT SHA: #$CI_COMMIT_SHORT_SHA       PIPELINE ID: $CI_PIPELINE_ID        /" target/site/jacoco/index.html'
-        - docker rm -f http_code_coverage_service || true 
-        - docker run -dit --name http_code_coverage_service -p $HTTPD_PORT:80  -v $(pwd)/target/site/jacoco/:/usr/local/apache2/htdocs/ httpd:2.4
+        - docker start web_server || (docker run -d --name web_server -p $HTTPD_PORT:80 httpd && docker exec web_server rm -f /usr/local/apache2/htdocs/index.html)
+        - mkdir -p $(pwd)/$HTTPD_DIRECTORY_NAME/code_coverage/ && cp -r $(pwd)/target/site/jacoco/ $(pwd)/$HTTPD_DIRECTORY_NAME/code_coverage/
+        - docker cp $(pwd)/$HTTPD_DIRECTORY_NAME web_server:/usr/local/apache2/htdocs/
     only:
         - master
         
@@ -139,6 +133,7 @@ deploy_staging:
         - docker cp $(pwd)/application.properties petclinic_stage_container:/
         - rm -f application.properties
         - docker start petclinic_stage_container
+    allow_failure: false
     environment:
         name: staging
         url: http://192.168.33.7
@@ -150,11 +145,10 @@ performance_test:
     tags:
         - shell
     script:
-        - artillery quick --count 20 -n 40 http://192.168.33.7:$STAGING_EXPOSED_PORT -o artillery_result -q
-    needs:
-        - deploy_staging
+        - artillery quick --count 20 -n 40 $STAGING_ADDR -o artillery_result -q
+        - mkdir -p $(pwd)/$HTTPD_DIRECTORY_NAME/performance_report/ && cp -r $(pwd)/artillery_result $(pwd)/$HTTPD_DIRECTORY_NAME/performance_report/
+        - docker cp $(pwd)/$HTTPD_DIRECTORY_NAME/performance_report/ web_server:/usr/local/apache2/htdocs/$HTTPD_DIRECTORY_NAME
     artifacts:
-      expire_in: 1 day
       paths:
           - ./artillery_result
     only:
@@ -165,14 +159,16 @@ selenium_uat:
     tags:
         - shell
     script:
-        - wget https://gist.githubusercontent.com/Sebastienn/09261e2086a7f8caa48f85f4a234c780/raw/ -O selenium-uat.py
-        - echo $(cat selenium-uat.py)
-        - chmod +x selenium-uat.py
-        - python selenium-uat.py http://192.168.33.7:$STAGING_EXPOSED_PORT
-        - rm -f selenium-uat.py
+        - wget $SELENIUM_UAT_TESTS_REPO -O uat-selenium.py
+        - chmod +x uat-selenium.py
+        - python uat-selenium.py $STAGING_ADDR selenium_test_result.txt
+        - mkdir -p $(pwd)/$HTTPD_DIRECTORY_NAME/uat_test_report/ && cp -r $(pwd)/selenium_test_result.txt $(pwd)/$HTTPD_DIRECTORY_NAME/uat_test_report/
+        - docker cp $(pwd)/$HTTPD_DIRECTORY_NAME/uat_test_report/ web_server:/usr/local/apache2/htdocs/$HTTPD_DIRECTORY_NAME
+        - rm -f uat-selenium.py
     allow_failure: false
-    needs:
-        - deploy_staging
+    artifacts:
+      paths:
+          - ./selenium_test_result.txt
     only:
         - master
 
@@ -186,8 +182,6 @@ promote_image:
         - docker push $DOCKER_REGISTRY_ADDR/prod-$DOCKER_IMAGE_TAGGED
     when: manual
     allow_failure: false
-    needs:
-        - selenium_uat
     only:
         - master
         
@@ -211,7 +205,5 @@ deploy_production:
         url: http://192.168.33.5
     when: manual
     allow_failure: false
-    needs:
-        - promote_image
     only:
         - master
